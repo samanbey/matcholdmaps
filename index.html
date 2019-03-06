@@ -1,0 +1,1057 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">        
+        <title>MatchOldMaps</title>
+        <link href="style.css" rel="stylesheet" />
+        <link href="ol/ol.css" rel="stylesheet" />
+        <script src="ol/ol.js"></script>
+        <link href="ol/ol-layerswitcher.css" rel="stylesheet" />
+        <script src="ol/ol-layerswitcher.js"></script>
+        <link href="ol/ol-geocoder.css" rel="stylesheet" />
+        <script src="ol/ol-geocoder.js?dfjkhwejklh"></script>
+        <script src="ol/delaunator.js"></script>
+    </head>
+    <body>
+        <div id="oldmap"></div>
+        <div id="newmap"></div>
+        <button id="link" title="Link/unlink maps" onclick="switchLink()"></button>
+        <button id="newpoint" title="New point" onclick="newGcp()">*</button>
+        <div id="controls">
+            <div>
+            <label for="loadoldmap">Load old map image (JPEG format)</label> 
+            <input type="file" id="loadoldmap" accept=".jpg" onchange="loadOldMap()" />
+            <br/>
+            <label for="loadcsv">Load control points (CSV format)</label> 
+            <input type="file" id="loadcsv" accept=".csv" onchange="loadCsv()" />
+            <br/>
+            <input type="button" value="Save points" onclick="save()" />
+            <input type="button" id="gcbutton" value="Geocode points without lon/lat" onclick="geocode()" />
+            <br/>
+            <input type="button" value="Interpolate other points on old map" onclick="interpolate()" />
+            </div>
+            <div id="listcontainer"><table id="gcplist"></table></div>
+        </div>
+        <div id="fader">
+            <div id="msgbox">Hejj</div>
+        </div>
+        <script>
+            // GLOBALS
+            //
+            var bingKey="Agz8kasOWHdFE2JA3j_3wxNF_i_Z6KNLT4IAUDRmhHL8AAuxic_gDCg-4xA4y02F"; // Bing Maps key
+            var nextId=1; // next id
+            var labelAttr="id"; // map label attr name
+            var mapW=0, mapH=0; // map size in pixels
+            var link=true; // are the two maps linked?
+            var fields; // array containing attribute names
+            
+            // DOM objects
+            var gcpList=document.getElementById('gcplist');
+                        
+            // switch linked map move on/off
+            function switchLink() {
+                link=!link;
+                document.getElementById('link').className=link?'':'unlink';
+            }
+            
+            // gcp style function (new map)
+            var gcpStyle=function(f,r) {
+                if (f.get('onOldMap')) {
+                    var fc=[0,0,255,.2], sc=[0,0,255,.6];
+                }
+                else {
+                    var fc=[255,128,0,.2], sc=[255,128,0,.6];
+                }
+                return new ol.style.Style({
+                    image: new ol.style.Circle({
+                        radius: 5,
+                        stroke: new ol.style.Stroke({ color: sc, width: 2 }),
+                        fill: new ol.style.Fill({ color: fc })
+                    }),
+                    text: r>400?null:new ol.style.Text({ text: f.get(labelAttr).split('|')[0], textAlign: "left", offsetX: 8, font: '12px sans-serif', stroke: new ol.style.Stroke({color:'#fff',width:3})  })
+                });
+            }
+            
+            // gcp style function (old map)
+            var ogcpStyle=function(f,r) {
+                if (f.get('useAsGcp')) {
+                    var fc=[0,0,255,.2], sc=[0,0,255,.6];
+                }
+                else {
+                    var fc=[255,128,0,.2], sc=[255,128,0,.6];
+                }
+                return new ol.style.Style({
+                    image: new ol.style.Circle({
+                        radius: 5,
+                        stroke: new ol.style.Stroke({ color: sc, width: 2 }),
+                        fill: new ol.style.Fill({ color: fc })
+                    }),
+                    text: r>10?null:new ol.style.Text({ text: f.get(labelAttr).split('|')[0], textAlign: "left", offsetX: 8, font: '12px sans-serif', stroke: new ol.style.Stroke({color:'#fff',width:3})  })
+                });
+            }
+            
+            // grid style
+            var gridStyle=new ol.style.Style({
+                stroke: new ol.style.Stroke({ color: 'blue', width: 2 }),
+            })
+            
+            var gSource=new ol.source.Vector({}); // new map gcp source
+            
+            // new map gcp layer
+            var ngcps=new ol.layer.Vector({
+                source: gSource,
+                style: gcpStyle
+            });
+            
+            // layer showing the computed pointer positioin on the new map
+            var nptrl=new ol.layer.Vector({
+                source: new ol.source.Vector({}),
+                style: new ol.style.Style({
+                    //image: new ol.style.Icon({ src: 'img/crosshair.svg' })
+                    image: new ol.style.Circle({
+                        radius: 3,
+                        stroke: new ol.style.Stroke({ color: 'green', width: 2 })
+                    }),
+                    stroke: new ol.style.Stroke({ color: 'green', width: 2 })
+                })
+            });
+            var nptr=new ol.Feature(new ol.geom.Point([0,0]));
+            var nExtent=new ol.Feature(new ol.geom.LineString([[0,0]]));
+            nptrl.getSource().addFeatures([nptr,nExtent]);
+            
+            // CSV GCP file input
+            function loadCsv() {
+                var gcpf=document.getElementById('loadcsv'); 
+                var r=new FileReader();
+                r.onload=function(f) {
+                    // load points
+                    var l=f.target.result.trim().split('\n');
+                    // add lon;lat;x;y;useAsGcp;id if not exists
+                    if (l[0].indexOf('lon;lat;x;y;useAsGcp;id')!=0) {
+                        l[0]='lon;lat;x;y;useAsGcp;id;'+l[0];
+                        for (var i=1;i<l.length;i++)
+                            l[i]=';;;;false;'+i+';'+l[i];
+                    }
+                    fields=l[0].trim().split(';');
+                    // clear gcp layer sources
+                    gSource.clear();
+                    ogSource.clear();
+                    nextId=1;
+                    // clear non-geocoded points list
+                    gcpList.innerHTML='';
+                    var tr=document.createElement('tr');
+                    for (var j=5;j<fields.length;j++) {
+                        var th=document.createElement('th');
+                        fields[j]=fields[j].replace(/^"|"$/g,'');
+                        th.title="Use this as label";
+                        th.onclick=function() {
+                            labelAttr=this.textContent;
+                            ogSource.changed();gSource.changed();
+                        }
+                        th.textContent=fields[j];
+                        tr.appendChild(th);
+                    }
+                    var the=document.createElement('thead');
+                    the.appendChild(tr);gcpList.appendChild(the);
+                    var tb=document.createElement('tbody');
+                    gcpList.appendChild(tb);
+                    var of=[]; // features on old map
+                    var nf=[]; // features on new map
+                    for(var i=1;i<l.length;i++) {
+                        var d=l[i].trim().split(';');
+                        var a={},oa={};
+                        for (var j=5;j<fields.length;j++) {
+                            a[fields[j]]=oa[fields[j]]=d[j];
+                        }
+                        if (d[0]&&d[1]) // create point geometry if there are coordinates 
+                            a.geometry=new ol.geom.Point(ol.proj.fromLonLat([d[0]*1,d[1]*1]));
+                        if (d[2]&&d[3]) { 
+                            // add point to old map as well if there are x/y coordinates
+                            oa.geometry=new ol.geom.Point([d[2]*1,d[3]*1]);
+                            a.onOldMap=true;
+                            oa.useAsGcp=(d[4]=='true');
+                            of.push(new ol.Feature(oa));
+                        }
+                        var nff=new ol.Feature(a);
+                        nf.push(nff);
+                        if (a.id-0>=nextId)
+                            nextId=a.id-0+1;
+                        if (!(d[0]&&d[1])) {
+                            // append to the ungeocoded list if there are no coords
+                            var tr=document.createElement('tr');
+                            tr.id='gcpid#'+a.id;
+                            for (var j=5;j<fields.length;j++) {
+                                var td=document.createElement('td');
+                                td.setAttribute('contenteditable','true');
+                                td.onkeydown=cellContentEdited;
+                                td.textContent=d[j];
+                                tr.appendChild(td);
+                            }
+                            // place on map buttons
+                            var bo=document.createElement('input');bo.type="button";bo.value="old";bo.title="Place it on old map";
+                            bo.onclick=(function(f,oa,tr) { return function() {
+                                f.set('onOldMap',true);
+                                // place feature in center
+                                oa.geometry=new ol.geom.Point(oldmap.getView().getCenter());
+                                ogSource.addFeatures([new ol.Feature(oa)]);
+                                // remove row
+                                tr.parentNode.removeChild(tr);
+                                tr=null;
+                            } })(nff,oa,tr);
+                            var b=document.createElement('input');b.type="button";b.value="new";b.title="Place it on new map";
+                            b.onclick=(function(f,tr) { return function() {
+                                // place in center
+                                f.setGeometry(new ol.geom.Point(newmap.getView().getCenter()));
+                                // remove row
+                                tr.parentNode.removeChild(tr);
+                                tr=null;
+                            } })(nff,tr);
+                            var td=document.createElement('td');
+                            td.appendChild(bo);tr.appendChild(td);
+                            td=document.createElement('td');td.appendChild(b);tr.appendChild(td);
+                            tb.appendChild(tr);
+                        }
+                    }
+                    gSource.addFeatures(nf);
+                    ogSource.addFeatures(of);
+                    recalcTr();
+                }
+                r.readAsText(gcpf.files[0]);
+            } 
+            
+            // function called when point list cells are edited
+            function cellContentEdited(e){
+                if (e.keyCode==13) {
+                    var gid=e.target.parentNode.getAttribute('id').substr(6); // modified gcp id
+                    var ci=e.target.cellIndex;
+                    var fn=fields[ci+5];
+                    //console.log([gid,fn]);
+                    var f=getFeatureByAttr(gSource,'id',gid);
+                    //console.log(f);
+                    var orig=f.get(fn);
+                    console.log(gid+' - '+fn+' changed from '+orig+' to '+e.target.textContent);
+                    f.set(fn,e.target.textContent);
+                    return false;
+                } 
+            };
+            
+            // modern map layers
+            var otm=new ol.layer.Tile({
+                title: 'OpenTopoMap',
+                type: 'base',
+                source: new ol.source.OSM({
+                    url: 'https://{a-c}.tile.opentopomap.org/{z}/{x}/{y}.png',
+                    attributions: 'Tiles provided by <a href="http://opentopomap.org">OpenTopoMap</a>'+
+                    ' <a href="https://creativecommons.org/licenses/by-sa/3.0/">(CC-BY-SA)</a>',
+                    maxZoom: 17
+                })
+            });
+            var osm=new ol.layer.Tile({
+                title: 'OpenStreetMap',
+                type: 'base',
+                source: new ol.source.OSM()
+            });
+            var bing=new ol.layer.Tile({
+                title: 'Bing',
+                type: 'base',
+                source: new ol.source.BingMaps({
+                    key: bingKey,
+                    imagerySet: 'Road',
+                    culture: 'hu-hu'
+                })
+            });
+            // layer showing the active Delaunay triangle on new map
+            var ndtlh=new ol.layer.Vector({ source: new ol.source.Vector() });
+            // new map
+            var newmap=new ol.Map({
+                target: 'newmap',
+                layers: [osm,otm,bing,ndtlh,ngcps,nptrl],
+                view: new ol.View({
+                    center: ol.proj.fromLonLat([19.1, 47.5]),
+                    zoom: 11
+                })
+            });
+            newmap.addControl(new ol.control.LayerSwitcher());
+            var geocoder=new Geocoder();
+            newmap.addControl(geocoder);            
+          
+            // point mover control
+            function draggablePoints(map,vectorSource) {
+                var mf; // feature to be moved
+                var moving=false;
+                var c0; // coordinates of mousedown
+                var fc0; // initial coordinate of moving point
+                map.on('pointerdown',function(e){
+                    var f;
+                    if (e!==false)
+                        map.forEachFeatureAtPixel(e.pixel,
+                            function(fea) {
+                                if (vectorSource.hasFeature(fea)) {
+                                    f=fea;
+                                    return false;
+                                }
+                            });
+                    if (f) {
+                        mf=f;
+                        c0=e.coordinate;
+                        fc0=f.getGeometry().getCoordinates();
+                        moving=true;
+                        e.stopPropagation();
+                        e.preventDefault();
+                    }                
+                });
+                map.on('pointerup',function(e){
+                    moving=false;
+                });
+                map.on('pointermove',function(e){
+                    if (moving) {
+                        var c=e.coordinate;
+                        var fc=[fc0[0]+c[0]-c0[0],fc0[1]+c[1]-c0[1]];
+                        mf.getGeometry().setCoordinates(fc);
+                    }
+                });
+            }
+            // draggable points on new map
+            draggablePoints(newmap,gSource);
+            
+            // old map gcp layer
+            var ogSource=new ol.source.Vector({});
+            var ogcps=new ol.layer.Vector({
+                title: 'Points',
+                source: ogSource,
+                style: ogcpStyle
+            });
+            
+            // old map interpolated geographic grid
+            var ogrid=new ol.layer.Vector({
+                title: 'Geographic graticule',
+                style: gridStyle,
+                source: new ol.source.Vector()
+            });
+            
+            // switch between "map up" and "north up"
+            var SwitchNorthControl=(function (Control) {
+                function SwitchNorthControl(opt_options) {
+                    var options=opt_options || {};
+
+                    this.button=document.createElement('button');
+                    this.button.innerHTML='N';
+
+                    var element=document.createElement('div');
+                    element.className='rotate-north ol-unselectable ol-control';
+                    element.appendChild(this.button);
+
+                    Control.call(this, {
+                        element: element,
+                        target: options.target
+                    });
+
+                    this.button.addEventListener('click', this.handleSwitchNorth.bind(this), false);
+                }
+
+                if (Control) 
+                    SwitchNorthControl.__proto__=Control;
+                SwitchNorthControl.prototype=Object.create(Control&&Control.prototype);
+                SwitchNorthControl.prototype.constructor=SwitchNorthControl;
+
+                SwitchNorthControl.prototype.handleSwitchNorth = function handleSwitchNorth() {
+                    if (this.getMap().getView().getRotation()==0) {
+                        this.getMap().getView().setRotation(northAngle());
+                        this.button.innerHTML="↑";
+                    }
+                    else {
+                        this.getMap().getView().setRotation(0);
+                        this.button.innerHTML="N";
+                    }
+                };
+
+                return SwitchNorthControl;
+            }(ol.control.Control));            
+            
+            var tl=new ol.layer.Tile();
+            var odts=new ol.source.Vector(); // source of Delaunay triangles on old map
+            var ndts=new ol.source.Vector(); // source of Delaunay  triangles on new map
+            // layer showing Delaunay triangles on old map
+            var dtlh=new ol.layer.Vector({ title: 'Interpolation triangles', source: new ol.source.Vector() }); 
+            var oldmap=new ol.Map({
+                target: 'oldmap',
+                controls: [new ol.control.Zoom(), new SwitchNorthControl()],
+                layers: [tl,dtlh,ogrid,ogcps]            
+            });
+            oldmap.addControl(new ol.control.LayerSwitcher());
+                       
+            // draggable points on old map
+            draggablePoints(oldmap,ogSource);
+
+            // load old map image
+            function loadOldMap() {
+                var ifi=document.getElementById('loadoldmap');
+                var r=new FileReader();
+                r.onload=function(f) {
+                    var img=document.createElement('img');
+                    img.onload=function() {
+                        //console.log('...loaded');
+                        var w=img.width, h=img.height;
+                        //console.log([w,h])
+                        var ss=new ol.layer.Image({
+                            //title: '...',
+                            zIndex: -1,
+                            source: new ol.source.ImageStatic({
+                                url: f.target.result,
+                                imageExtent: [0,0,w,h]
+                            })
+                        }); 
+                        oldmap.addLayer(ss);
+                        oldmap.getView().fit([0,0,w,h]);
+                        mapW=w; mapH=h;
+                        //console.log('layer added');
+                    }
+                    img.src=f.target.result;
+                }
+                //console.log('loading map...')
+                r.readAsDataURL(ifi.files[0]);
+            }
+            
+            // synchronous move of maps
+            var linkedMove=false; // éppen mozgatunk?
+            
+            oldmap.on('moveend',function(e) {
+                if (link&&!linkedMove) {
+                    var oc=oldmap.getView().getCenter();
+                    var or=oldmap.getView().getResolution();
+                    var ocp=[oc[0]+100,oc[1]];
+                    var nc=old2new(oc), ncp=old2new(ocp);
+                    // scale factor calculated from a 100px vector
+                    var M=Math.sqrt((ncp[0]-nc[0])*(ncp[0]-nc[0])+(ncp[1]-nc[1])*(ncp[1]-nc[1]))/100;
+                    linkedMove=true;
+                    newmap.getView().setCenter(nc);
+                    newmap.getView().setResolution(or*M);
+                    setTimeout(function(){linkedMove=false;},200);
+                }
+            });
+            
+            newmap.on('moveend',function(e) {
+                if (link&&!linkedMove) {
+                    var nc=newmap.getView().getCenter();
+                    var nr=newmap.getView().getResolution();
+                    var ncp=[nc[0]+1000,nc[1]];
+                    var oc=new2old(nc), ocp=new2old(ncp);
+                    // scale factor calculated from a 1000m vector
+                    var M=Math.sqrt((ocp[0]-oc[0])*(ocp[0]-oc[0])+(ocp[1]-oc[1])*(ocp[1]-oc[1]))/1000;
+                    linkedMove=true;
+                    oldmap.getView().setCenter(oc);
+                    oldmap.getView().setResolution(nr*M);
+                    setTimeout(function(){linkedMove=false;},200);
+                }
+            });
+            
+            // hardcoded initial gcps and calculated similarity transformation parameters
+            // TODO: remove and disable initial linked move
+            var ox1=2261.9, oy1=10062-2545.2, nx1=1903523, ny1=6130562;
+            var ox2=14713.1, oy2=10062-1555.5, nx2=2870656, ny2=5758568;
+            var odx=ox2-ox1, ody=oy2-oy1, ndx=nx2-nx1, ndy=ny2-ny1;
+            var o_l=Math.sqrt(odx*odx+ody*ody), n_l=Math.sqrt(ndx*ndx+ndy*ndy);
+            var M=n_l/o_l; // scale
+            var oa=Math.atan2(odx,ody), na=Math.atan2(ndx,ndy);
+            var a=na-oa; // rotation
+            
+            // coordinate transform from old to new (Web Mercator)
+            function old2new(oc) {
+                return [nx1+M*((oc[0]-ox1)*Math.cos(a)+(oc[1]-oy1)*Math.sin(a)),ny1+M*(-(oc[0]-ox1)*Math.sin(a)+(oc[1]-oy1)*Math.cos(a))];
+            }
+
+            // coordinate transform from new to old (Web Mercator)
+            function new2old(nc) {
+                return [ox1+((nc[0]-nx1)*Math.cos(a)-(nc[1]-ny1)*Math.sin(a))/M,oy1+((nc[0]-nx1)*Math.sin(a)+(nc[1]-ny1)*Math.cos(a))/M];
+            }
+            
+            // bulk geocoding of names without coordinates
+            function geocode() {
+                // TODO: set attribute to geocode. it is the label attr by default
+                var gcAttr=labelAttr;
+                if (!confirm('Geocoding by '+labelAttr+', using the current extent of new map?'))
+                    return;
+                // get extent
+                var ext=newmap.getView().calculateExtent();
+                var vbox=ol.proj.toLonLat([ext[0],ext[1]]).concat(ol.proj.toLonLat([ext[2],ext[3]]));
+                // change button
+                var gcb=document.getElementById('gcbutton');
+                gcb.value="Stop geocoding";
+                var stopGc=false;
+                gcb.onclick=function() {
+                    stopGc=true;
+                    gcb.value="Geocode points without lon/lat";
+                    gcb.onclick=geocode;
+                }
+                // first item to geocode
+                var f=gSource.getFeatures();
+                for (var i=0;i<f.length;i++)
+                    if (!f[i].getGeometry())
+                        break;
+                console.log(i);
+                /*console.log(f[i].getProperties());
+                return;*/
+                function geocodeNext() {
+                    if (stopGc) {
+                        // emergency break
+                        stopGc=false;
+                        return;
+                    }
+                    if (i>=f.length) {
+                        gcb.click();
+                        console.log('finished geocoding');
+                        return;
+                    }
+                    var x=new XMLHttpRequest();
+                    var name=f[i].get(gcAttr);
+                    console.log('sending '+name);
+                    x.open('get','https://nominatim.openstreetmap.org/search?format=json&bounded=1&viewbox='+vbox+'&q='+name,true);
+                    x.onreadystatechange=function() {
+                        if(x.readyState==4&&x.status==200) {
+                            var r=JSON.parse(x.responseText);
+                            if (r.length>0) {
+                                // got result, choose one
+                                var rr=r[0];
+                                console.log(rr);
+                                // create geom from lon/lat
+                                var g=new ol.geom.Point(ol.proj.fromLonLat([rr.lon-0,rr.lat-0]));
+                                f[i].setGeometry(g);
+                                newmap.getView().setCenter(ol.proj.fromLonLat([rr.lon-0,rr.lat-0]));
+                                // find and remove row from ungeocoded list
+                                var tr=document.getElementById('gcpid#'+f[i].get('id'));
+                                tr.parentNode.removeChild(tr);
+                                tr=null;
+                            }
+                            for (i+=1;i<f.length;i++)
+                                if (!f[i].getGeometry())
+                                    break;
+                            console.log(i);
+                            setTimeout(geocodeNext,1000);
+                        }
+                    }
+                    x.send();
+                }
+                geocodeNext();
+            }
+            
+            // point attr edited
+            function ptAttrChanged(span,id,field) {
+                var nf=getFeatureByAttr(gSource,'id',id);
+                nf.set(field,span.textContent);
+                var of=getFeatureByAttr(ogSource,'id',id);
+                if (of)
+                    of.set(field,span.textContent);
+            }
+            
+            // popup on click on new map
+            newmap.on('click', function(e) {
+                var fs=[];
+                if (e!==false)
+                    newmap.forEachFeatureAtPixel(e.pixel,
+                        function(f) {
+                            if (gSource.hasFeature(f)) fs.push(f);
+                        });
+                if (fs.length>0) {
+                    // popup content
+                    var c='';
+                    var p=fs[0].getKeys();
+                    for (var i=0;i<p.length;i++)
+                        if (['geometry'].indexOf(p[i])<0)
+                            c+=p[i]+(p[i]=='id'?":<span>":(": <span contenteditable=\"true\" onkeydown=\"if (event.keyCode==13) {ptAttrChanged(this,"+fs[0].get('id')+",'"+p[i]+"');return false;}\">"))+fs[0].get(p[i])+"</span><br/>";
+                    if (!getFeatureByAttr(ogSource,'id',fs[0].get('id')))
+                        c+='<a href="javascript:addToOld('+fs[0].get('id')+')">Add point to old map</a><br>';
+                    c+='<a href="javascript:removeFromMap('+fs[0].get('id')+')">Remove from map(s)</a>';
+                    // open popup
+                    popup({
+                        map: newmap,
+                        pos: fs[0].getGeometry().getCoordinates(),
+                        content: c
+                    });
+                }
+            });
+            
+            function removeFromMap(id) {
+                var of=getFeatureByAttr(ogSource,'id',id);
+                if (of) {
+                    ogSource.removeFeature(of);                    
+                }
+                var nf=getFeatureByAttr(gSource,'id',id);
+                if (nf) {
+                    nf.setGeometry(null);
+                    var oa={};
+                    // add row to the gcp list table
+                    var tr=document.createElement('tr');
+                    for (var i=5;i<fields.length;i++) {
+                        var td=document.createElement('td');
+                        oa[fields[i]]=nf.get(fields[i]);
+                        td.textContent=nf.get(fields[i]);
+                        tr.appendChild(td);
+                    }
+                    // place on map buttons
+                    var bo=document.createElement('input');bo.type="button";bo.value="old";bo.title="Place it on old map";
+                    bo.onclick=(function(f,oa,tr) { return function() {
+                        f.set('onOldMap',true);
+                        // place feature in center
+                        oa.geometry=new ol.geom.Point(oldmap.getView().getCenter());
+                        ogSource.addFeatures([new ol.Feature(oa)]);
+                        // remove row
+                        tr.parentNode.removeChild(tr);
+                        tr=null;
+                    } })(nf,oa,tr);
+                    var b=document.createElement('input');b.type="button";b.value="new";b.title="Place it on new map";
+                    b.onclick=(function(f,tr) { return function() {
+                        // place in center
+                        f.setGeometry(new ol.geom.Point(newmap.getView().getCenter()));
+                        // remove row
+                        tr.parentNode.removeChild(tr);
+                        tr=null;
+                    } })(nf,tr);
+                    var td=document.createElement('td');
+                    td.appendChild(bo);tr.appendChild(td);
+                    td=document.createElement('td');td.appendChild(b);tr.appendChild(td);
+                    // append to list
+                    gcplist.appendChild(tr);
+                }
+            }
+            
+            // popup on click on old map
+            oldmap.on('click', function(e) {
+                var fs=[];
+                if (e!==false)
+                    oldmap.forEachFeatureAtPixel(e.pixel,
+                        function(f) {
+                            if (ogSource.hasFeature(f)) fs.push(f);
+                        });
+                if (fs.length>0) {
+                    // popup content
+                    var c='';
+                    var p=fs[0].getKeys();
+                    for (var i=0;i<p.length;i++)
+                        if (['geometry'].indexOf(p[i])<0)
+                            c+=p[i]+": "+fs[0].get(p[i])+"<br/>";
+                    // open popup
+                    var p=popup({
+                        map: oldmap,
+                        pos: fs[0].getGeometry().getCoordinates(),
+                        content: c
+                    });
+                    // add use as gcp checkbox
+                    var cb=document.createElement('input');
+                    cb.type='checkbox';cb.checked=(fs[0].get('useAsGcp')==true);
+                    cb.onchange=function() {
+                        fs[0].set('useAsGcp',cb.checked);
+                        recalcTr();
+                    }
+                    p.div.appendChild(cb);p.div.appendChild(document.createTextNode(' use as GCP'));
+                }
+            });
+            
+            // finds the first feature with matching attribute value
+            function getFeatureByAttr(source,attrName,value) {
+                var f=source.getFeatures();
+                for (var i=0;i<f.length;i++)
+                    if (f[i].get(attrName)==value)
+                        return f[i];
+                return false;
+            }
+            
+            function addToOld(id,pos) {
+                var nf=getFeatureByAttr(gSource,'id',id);
+                var attr=nf.getProperties();
+                attr.geometry=new ol.geom.Point(pos?pos:oldmap.getView().getCenter());
+                var f=new ol.Feature(attr);
+                ogSource.addFeatures([f]);
+                nf.set('onOldMap',true);
+            }
+            
+            // open popup on a map
+            // parameters: { map: OL map object, pos: coords, content: content (HTML text) }
+            function popup(opts) {
+                // popup object
+                var p={};
+                p.map=opts.map;
+                // content div
+                p.div=document.createElement('div');
+                p.div.className='mapPopup';
+                // create overlay
+                p.ovl=new ol.Overlay({
+                    element: p.div,
+                    //offset: [0,0],
+                    insertFirst: false,
+                    positioning: 'bottom-left'
+                });
+                p.ovl.setPosition(opts.pos);
+                p.map.addOverlay(p.ovl);
+                // close button
+                var cb=document.createElement('input');
+                cb.type="button";cb.value="✖";cb.className='mapPopupClose';
+                p.div.appendChild(cb);
+                var cdiv=document.createElement('div');
+                cdiv.innerHTML=opts.content;
+                p.div.appendChild(cdiv);
+                // close event listener
+                p.close=function (e) {
+                    p.map.removeOverlay(p.ovl);
+                    delete p;
+                }
+                cb.addEventListener('click',p.close,true);
+                cb.addEventListener('closepopup',p.close);
+                return p;
+            }
+            
+            // koordináta-trafó újraszámolása az aktuális illesztőpontok alapján
+            function recalcTr() {
+                // az aktív gcp-k összeszedése
+                var gcp=[];
+                ogSource.forEachFeature(function(f) {
+                    if (f.get('useAsGcp')) {
+                        var id=f.get('id');
+                        gcp.push({
+                            oc: f.getGeometry().getCoordinates(),
+                            nc: getFeatureByAttr(gSource,'id',id).getGeometry().getCoordinates()
+                        })
+                    }
+                });
+                // ha nincs legalább 2 gcp, akkor nem csinálunk semmit
+                if (gcp.length<2)
+                    return;
+                // ha 2 gcp van, akkor Helmert
+                if (gcp.length==2) {
+                    ox1=gcp[0].oc[0], oy1=gcp[0].oc[1], nx1=gcp[0].nc[0], ny1=gcp[0].nc[1];
+                    ox2=gcp[1].oc[0], oy2=gcp[1].oc[1], nx2=gcp[1].nc[0], ny2=gcp[1].nc[1];
+                    odx=ox2-ox1, ody=oy2-oy1, ndx=nx2-nx1, ndy=ny2-ny1;
+                    o_l=Math.sqrt(odx*odx+ody*ody), n_l=Math.sqrt(ndx*ndx+ndy*ndy);
+                    M=n_l/o_l;
+                    oa=Math.atan2(odx,ody), na=Math.atan2(ndx,ndy);
+                    a=na-oa;
+                }
+                else { // 3+ gcp-től létrehozzuk a Delaunay-háromszögeket és kiszámítjuk a bennük lévő lin.trafót
+                    // régi térkép illesztőpont-koordináták külön tömbbe
+                    for (var p=[],i=0;i<gcp.length;i++)
+                        p[i]=gcp[i].oc;
+                    var d=Delaunator.from(p);
+                    t=d.triangles;
+                    var fo=[],fn=[];
+                    for (var i=0;i<t.length;i+=3) {
+                        var to=[p[t[i]],p[t[i+1]],p[t[i+2]]];
+                        var tn=[gcp[t[i]].nc,gcp[t[i+1]].nc,gcp[t[i+2]].nc];
+                        var go=new ol.geom.Polygon([to]);
+                        var gn=new ol.geom.Polygon([tn]);
+                        // csak akkor használjuk a háromszög-párt, ha megegyezik a körüljárási irányuk
+                        var oa1=Math.atan2(to[1][0]-to[0][0],to[1][1]-to[0][1]);
+                        var oa2=Math.atan2(to[2][0]-to[0][0],to[2][1]-to[0][1]);
+                        var na1=Math.atan2(tn[1][0]-tn[0][0],tn[1][1]-tn[0][1]);
+                        var na2=Math.atan2(tn[2][0]-tn[0][0],tn[2][1]-tn[0][1]);
+                        if (Math.sin(oa1-oa2)*Math.sin(na1-na2)>0) {
+                            // adott háromszögön belül az oda és vissza lin. trafó paraméterek kiszámítása
+                            var Ao=[],bo1=[],bo2=[],An=[],bn1=[],bn2=[];
+                            for(var j=0;j<3;j++) {
+                                Ao[j]=[p[t[i+j]][0],p[t[i+j]][1],1];
+                                bo1[j]=gcp[t[i+j]].nc[0];
+                                bo2[j]=gcp[t[i+j]].nc[1];
+                                An[j]=[gcp[t[i+j]].nc[0],gcp[t[i+j]].nc[1],1];
+                                bn1[j]=p[t[i+j]][0];
+                                bn2[j]=p[t[i+j]][1];
+                            }
+                            fo.push(new ol.Feature({
+                                geometry: go, 
+                                id: i/3, 
+                                xcfo2n: linEq3(Ao,bo1), 
+                                ycfo2n: linEq3(Ao,bo2)
+                            }));
+                            fn.push(new ol.Feature({
+                                geometry: gn, 
+                                id: i/3, 
+                                xcfn2o: linEq3(An,bn1), 
+                                ycfn2o: linEq3(An,bn2)
+                            }));
+                        }
+                        //else console.log([oa1-oa2,na1-na2]);
+                    }
+                    odts.clear();
+                    odts.addFeatures(fo);
+                    ndts.clear();
+                    ndts.addFeatures(fn);
+                    // új átszámító függvények
+					old2new=function(oc) {
+						var ts=odts.getFeaturesAtCoordinate(oc);                    
+						var t=ts.length>0?ts[0]:odts.getClosestFeatureToCoordinate(oc);
+						var xc=t.get('xcfo2n'), yc=t.get('ycfo2n');
+						return [xc[0]*oc[0]+xc[1]*oc[1]+xc[2],yc[0]*oc[0]+yc[1]*oc[1]+yc[2]];
+					}
+					new2old=function(nc) {
+						var ts=ndts.getFeaturesAtCoordinate(nc);                    
+						var t=ts.length>0?ts[0]:ndts.getClosestFeatureToCoordinate(nc);
+						var xc=t.get('xcfn2o'), yc=t.get('ycfn2o');
+						return [xc[0]*nc[0]+xc[1]*nc[1]+xc[2],yc[0]*nc[0]+yc[1]*nc[1]+yc[2]];
+					}
+					// nem gcp-k áthelyezése ennek megfelelően
+					/*ogSource.forEachFeature(function(f){
+						if (!f.get('useAsGcp')) {
+							var id=f.get('id');
+                            if (f&&getFeatureByAttr(gSource,'id',id)) {
+                                var	nc=getFeatureByAttr(gSource,'id',id).getGeometry().getCoordinates();
+                                f.getGeometry().setCoordinates(new2old(nc));
+                            }
+                            else console.log(id+' nincs!');
+						}
+					});*/
+                    // fokháló mutatása
+                    addInterpolatedGrid();
+                }
+            }
+            
+            // interplated geographic graticule
+            function addInterpolatedGrid() {
+                var s=ogrid.getSource();
+                s.clear();
+                var f=[];
+                // calculate min/max latitudes/longitudes
+                // calculate a set of points along the old map edges
+                //var p=[[0,0],[mapW,0],[0,mapH],[mapW,mapH]]; // corners of old map
+                var p=[],bx=[];
+                for (var i=0;i<10;i++) {
+                    var pt=old2new([i/10*mapW,0]);
+                    p.push(ol.proj.toLonLat(pt));
+                    bx.push(pt);
+                }
+                for (var i=0;i<10;i++) {
+                    var pt=old2new([mapW,i/10*mapH]);
+                    p.push(ol.proj.toLonLat(pt));
+                    bx.push(pt);
+                }
+                for (var i=0;i<10;i++) {
+                    var pt=old2new([(10-i)/10*mapW,mapH])
+                    p.push(ol.proj.toLonLat(pt));
+                    bx.push(pt);
+                }
+                for (var i=0;i<10;i++) {
+                    var pt=old2new([0,(10-i)/10*mapH]);
+                    p.push(ol.proj.toLonLat(pt));
+                    bx.push(pt);
+                }
+                bx.push(bx[0].slice());
+                console.log(p);
+                var fi1=90, fi2=-90, la1=180, la2=-180, dfi=1, dla=1, fi, la;
+                for (var i=0;i<p.length;i++) {
+                    [la,fi]=p[i];
+                    //console.log([la,fi]);
+                    if (fi<fi1) fi1=Math.floor(fi);
+                    if (fi>fi2) fi2=Math.ceil(fi);
+                    if (la<la1) la1=Math.floor(la);
+                    if (la>la2) la2=Math.ceil(la);
+                }
+                console.log([fi1,la1,fi2,la2]);
+                // draw computed bounds on new map
+                nExtent.getGeometry().setCoordinates(bx);
+                var x,y;
+                // create latitudes. interrupt them if they fall out of map extent
+                for (fi=fi1; fi<=fi2; fi+=dfi) {
+                    var cr=[];
+                    for (la=la1; la<=la2; la+=dla/30) {
+                        [x,y]=new2old(ol.proj.fromLonLat([la,fi]));
+                        if (x>=0&&x<=mapW&&y>=0&&y<=mapH)
+                            cr.push([x,y]);
+                        else {
+                            if (cr.length>1)
+                                f.push(new ol.Feature(new ol.geom.LineString(cr)));
+                            cr=[];
+                        }
+                    }
+                    if (cr.length>1)
+                        f.push(new ol.Feature(new ol.geom.LineString(cr)));
+                }
+                // create longitudes. interrupt them if they fall out of map extent
+                for (la=la1; la<=la2; la+=dla) {
+                    var cr=[];
+                    for (fi=fi1; fi<=fi2; fi+=dfi/30) {
+                        [x,y]=new2old(ol.proj.fromLonLat([la,fi]));
+                        if (x>=0&&x<=mapW&&y>=0&&y<=mapH)
+                            cr.push([x,y]);
+                        else {
+                            if (cr.length>1)
+                                f.push(new ol.Feature(new ol.geom.LineString(cr)));
+                            cr=[];
+                        }
+                    }
+                    if (cr.length>1)
+                        f.push(new ol.Feature(new ol.geom.LineString(cr)));
+                }
+                s.addFeatures(f);
+            }
+            
+            // az összes pontot felrakja a régi térképre (ha még nincsenek ott), és a koordinátáikat interpolálja
+            function interpolate() {
+                // rakjunk át mindent, ami még nincs ott
+                var cnt=0;
+                gSource.forEachFeature(function(f) {
+                    //if (cnt>100) return false;
+                    if (!f.get('onOldMap')) {
+                        var oc=new2old(f.getGeometry().getCoordinates());
+                        addToOld(f.get('id'),oc);
+                        cnt++;
+                    }
+                });
+            }
+            
+
+            // pozícióhoz tartozó pont az új térképen és d-h mutatása (csak debughoz)
+            oldmap.on('pointermove',function(e) {
+                var np=old2new(e.coordinate);
+                nptr.getGeometry().setCoordinates(np);
+                // csak akkor, ha a háromszög réteg be van kapcsolva
+                if (dtlh.getVisible()) {
+                    var ts=odts.getFeaturesAtCoordinate(e.coordinate);                    
+                    var t=ts.length>0?ts[0]:odts.getClosestFeatureToCoordinate(e.coordinate);
+                    dtlh.getSource().clear();
+                    ndtlh.getSource().clear();
+                    if (t) {
+                        dtlh.getSource().addFeatures([t.clone()]);
+                        var nt=getFeatureByAttr(ndts,'id',t.get('id'));
+                        //console.log(nt.getGeometry().getCoordinates());
+                        ndtlh.getSource().addFeatures([nt.clone()]);
+                    } 
+                }
+            }); 
+
+            // solves a 3*3 lin. equation system
+            function linEq3(A,b) { 
+                var D=A[0][0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1])-
+                      A[0][1]*(A[1][0]*A[2][2]-A[1][2]*A[2][0])+
+                      A[0][2]*(A[1][0]*A[2][1]-A[1][1]*A[2][0]);
+                var D0=b[0]*(A[1][1]*A[2][2]-A[1][2]*A[2][1])-
+                       A[0][1]*(b[1]*A[2][2]-A[1][2]*b[2])+
+                       A[0][2]*(b[1]*A[2][1]-A[1][1]*b[2]);
+                var D1=A[0][0]*(b[1]*A[2][2]-A[1][2]*b[2])-
+                       b[0]*(A[1][0]*A[2][2]-A[1][2]*A[2][0])+
+                       A[0][2]*(A[1][0]*b[2]-b[1]*A[2][0]);
+                var D2=A[0][0]*(A[1][1]*b[2]-b[1]*A[2][1])-
+                       A[0][1]*(A[1][0]*b[2]-b[1]*A[2][0])+
+                       b[0]*(A[1][0]*A[2][1]-A[1][1]*A[2][0]);
+                return [D0/D,D1/D,D2/D];
+            }
+            
+            // turns elements of an array to fixed format with p precision
+            function fix(a,p) {
+                var aa=[];
+                for (var i=0;i<a.length;i++)
+                    aa[i]=a[i].toFixed(p);
+                return aa;
+            }
+            
+            // save points
+            function save() {
+                // lon, lat, x, y, useAsGcp, all other fields
+                var fields=['lon','lat','x','y','useAsGcp'];
+                var fl=gSource.getFeatures();
+                var keys=fl[0].getKeys();
+                for (var i=0;i<keys.length;i++) 
+                    if (['geometry','onOldMap'].indexOf(keys[i])<0)
+                        fields.push(keys[i]);
+                var list=fields.join(';')+'\n';
+                for (i=0;i<fl.length;i++) {
+                    var id=fl[i].get('id');
+                    var of=getFeatureByAttr(ogSource,'id',id);
+                    var ng=fl[i].getGeometry();
+                    var nc=ng?fix(ol.proj.toLonLat(ng.getCoordinates()),6):['',''];
+                    var oc=of?fix(of.getGeometry().getCoordinates(),1):['',''];
+                    var u=of?of.get('useAsGcp')==true:false
+                    var d=[nc[0],nc[1],oc[0],oc[1],u];
+                    for (j=5;j<fields.length;j++)
+                        d.push(fl[i].get(fields[j]));
+                    list+=d.join(';')+'\n';
+                }
+                console.log(list);
+                // save csv format
+                var a=document.createElement('a');
+                a.href="data:text/csv;base64,"+btoa(unescape(encodeURIComponent(list)));
+                a.download="gcps.csv";
+                a.style.display="none";
+                document.body.appendChild(a);
+                a.click();
+                document.removeChild(a);                
+            }
+            
+            // add new point pair
+            function newGcp() {
+                var keys=gSource.getFeatures()[0].getKeys();
+                var a={};
+                a.id=nextId++;
+                for (var i=0;i<keys.length;i++) 
+                    if (['geometry','onOldMap','id'].indexOf(keys[i])<0)
+                        a[keys[i]]=prompt('id: '+a.id+" - "+keys[i]);
+                a.geometry=new ol.geom.Point(oldmap.getView().getCenter());
+                var f=new ol.Feature(a);
+                ogSource.addFeatures([f]);
+                a.geometry=new ol.geom.Point(newmap.getView().getCenter());
+                f=new ol.Feature(a);
+                gSource.addFeatures([f]);
+                f.set('onOldMap',true);                
+            }
+            
+            // calculates North direction on old map from gcps
+            function northAngle() {
+                // calculate linear transformation from lon/lat to image x/y using least squares
+                var A=[[0,0,0],[0,0,0],[0,0,0]], b1=[0,0,0], b2=[0,0,0];
+                gSource.forEachFeature(function(f) {
+                    if (f.get('onOldMap')) {
+                        var ll=ol.proj.toLonLat(f.getGeometry().getCoordinates());
+                        var of=getFeatureByAttr(ogSource,'id',f.get('id'));
+                        var xy=of.getGeometry().getCoordinates();
+                        A[0][0]+=ll[0]*ll[0];
+                        A[0][1]+=ll[0]*ll[1];
+                        A[0][2]+=ll[0];
+                        A[1][0]+=ll[0]*ll[1];
+                        A[1][1]+=ll[1]*ll[1];
+                        A[1][2]+=ll[1];
+                        A[2][0]+=ll[0];
+                        A[2][1]+=ll[1];
+                        A[2][2]+=1;
+                        b1[0]+=ll[0]*xy[0];
+                        b1[1]+=ll[1]*xy[0];
+                        b1[2]+=xy[0];
+                        b2[0]+=ll[0]*xy[1];
+                        b2[1]+=ll[1]*xy[1];
+                        b2[2]+=xy[1];
+                    }
+                });
+                var ax=linEq3(A,b1);
+                var ay=linEq3(A,b2);
+                console.log(ax);
+                console.log(ay);
+                console.log(Math.atan2(-ax[1],ay[1])/Math.PI*180);
+                console.log(Math.atan2(ay[0],ax[0])/Math.PI*180);
+                return (Math.atan2(-ax[1],ay[1])+Math.atan2(ay[0],ax[0]))/2;
+            }
+            
+            // opens a message box
+            function msgBox(html) {
+                var f=document.getElementById('fader');
+                var mb=document.getElementById('msgbox');
+                mb.innerHTML=html+'<br/>';
+                // add OK button
+                var ob=document.createElement('input');
+                ob.type='button';ob.value='OK';
+                function closeIt() {
+                    f.style.display='none';
+                }
+                ob.onclick=closeIt;
+                f.onkeydown=function(e) {
+                    console.log(e.keyCode)
+                    if (e.keyCode==13)
+                        closeIt();
+                }
+                mb.appendChild(ob);
+                // display fader and msgbox
+                f.style.display='block';
+            }
+            
+            // initial message
+            msgBox('<h1>MatchOldMaps</h1>'+
+                '<p>Georeference old maps by setting the position of places using a modern map in parallel view.</p>'+
+                '<p>&copy; 2019 Mátyás Gede &ndash; Department of Cartography and Geoinformatics, ELTE Eötvös Loránd University, Budapest</p>'
+            );
+        </script>
+    </body>
+</html>

@@ -1,0 +1,105 @@
+html, body {
+    height: 100%;
+    margin: 0;
+}
+#fader {
+    position: fixed;
+    height: 100%; width: 100%;
+    background: rgba(0,0,0,0.2);
+    display: none;
+}
+#msgbox {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    -webkit-transform: translate(-50%, -50%);
+    transform: translate(-50%, -50%);
+    z-index: 19999;
+    background: rgba(255,255,255,0.6);
+    width: auto;
+    padding: 10px;
+    border-radius: 10px;
+    border: solid 1px #000;
+    text-align: center;    
+}
+#oldmap {
+    position: absolute;
+    top: 0; left: 0; width: 50%; bottom: 150px;
+}
+#newmap {
+    position: absolute;
+    top: 0; right: 0; width: 50%; bottom: 150px;
+}
+#controls {
+    position: absolute;
+    height: 150px; left: 0; width: 100%; bottom: 0;
+    display: flex;
+    flex-direction: row;
+}
+#listcontainer {
+    position: absolute;
+    height: 150px;
+    bottom: 0;
+    right: 0;
+    overflow: auto;
+}
+#gcplist {
+    height: 100%;
+}
+#gcplist thead {
+    background: gray;
+}
+#gcplist  tbody tr:nth-child(odd) {
+    background: lightgray;
+}
+#gcplist thead th:hover {
+    cursor: pointer;
+    color: red;
+}
+.mapPopup{
+    background: rgba(255,255,255,0.7);
+    border: solid 1px blue;
+    border-radius: 5px;
+    padding: 5px;
+}
+.mapPopupClose {
+    display: block;
+    padding: 1px 3px;
+    margin-left: auto;
+}
+#link {
+    position: absolute;
+    border: none;
+    border-radius: 2px;
+    z-index: 10000;
+    bottom: 150px; left: 50%;
+    -webkit-transform: translateX(-50%);
+    -ms-transform: translateX(-50%);
+    transform: translateX(-50%);    
+    width: 25px; height: 25px;
+    background-color: rgb(128, 158, 187);
+    background-image: url('img/link.png');
+    background-size: contain;
+}
+#link.unlink {
+    background-image: url('img/unlink.png');
+}
+#newpoint {
+    position: absolute;
+    border: none;
+    border-radius: 2px;
+    z-index: 10000;
+    bottom: 180px; left: 50%;
+    -webkit-transform: translateX(-50%);
+    -ms-transform: translateX(-50%);
+    transform: translateX(-50%);    
+    width: 25px; height: 25px;
+    background-color: rgb(128, 158, 187);
+    color: white;
+    /*background-image: url('img/link.png');*/
+    background-size: contain;
+}
+.rotate-north {
+    top: 65px;
+    left: .5em;
+}
