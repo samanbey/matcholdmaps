@@ -252,8 +252,17 @@
                 type: 'base',
                 source: new ol.source.OSM()
             });
-            var bing=new ol.layer.Tile({
-                title: 'Bing',
+            var binga=new ol.layer.Tile({
+                title: 'Bing Aerial',
+                type: 'base',
+                source: new ol.source.BingMaps({
+                    key: bingKey,
+                    imagerySet: 'Aerial',
+                    culture: 'hu-hu'
+                })
+            });
+            var bingr=new ol.layer.Tile({
+                title: 'Bing Road',
                 type: 'base',
                 source: new ol.source.BingMaps({
                     key: bingKey,
@@ -266,7 +275,7 @@
             // new map
             var newmap=new ol.Map({
                 target: 'newmap',
-                layers: [osm,otm,bing,ndtlh,ngcps,nptrl],
+                layers: [osm,otm,binga,bingr,ndtlh,ngcps,nptrl],
                 view: new ol.View({
                     center: ol.proj.fromLonLat([19.1, 47.5]),
                     zoom: 11
@@ -374,10 +383,14 @@
             var ndts=new ol.source.Vector(); // source of Delaunay  triangles on new map
             // layer showing Delaunay triangles on old map
             var dtlh=new ol.layer.Vector({ title: 'Interpolation triangles', source: new ol.source.Vector() }); 
+            // old map object
             var oldmap=new ol.Map({
                 target: 'oldmap',
                 controls: [new ol.control.Zoom(), new SwitchNorthControl()],
-                layers: [tl,dtlh,ogrid,ogcps]            
+                layers: [tl,dtlh,ogrid,ogcps],   
+                view: new ol.View({
+                    resolutions: [256,192,128,96,64,48,32,24,16,12,8,6,4,3,2,1]
+                })
             });
             oldmap.addControl(new ol.control.LayerSwitcher());
                        
@@ -429,6 +442,13 @@
                     newmap.getView().setResolution(or*M);
                     setTimeout(function(){linkedMove=false;},200);
                 }
+            });
+            
+            // hide tracking point and active triangle on new map when the pointer leaves the old map
+            oldmap.getViewport().addEventListener('mouseout',function(e) {
+                nptr.getGeometry().setCoordinates([0/0,0/0]);
+                ndtlh.getSource().clear();
+                dtlh.getSource().clear();
             });
             
             newmap.on('moveend',function(e) {
@@ -700,9 +720,9 @@
                 return p;
             }
             
-            // koordináta-trafó újraszámolása az aktuális illesztőpontok alapján
+            // recalculate coordinate transformation based on control points
             function recalcTr() {
-                // az aktív gcp-k összeszedése
+                // collect active gcps
                 var gcp=[];
                 ogSource.forEachFeature(function(f) {
                     if (f.get('useAsGcp')) {
@@ -713,10 +733,10 @@
                         })
                     }
                 });
-                // ha nincs legalább 2 gcp, akkor nem csinálunk semmit
+                // if less than 2 gcp, do nothing
                 if (gcp.length<2)
                     return;
-                // ha 2 gcp van, akkor Helmert
+                // 2 gcps -> similarity transformation
                 if (gcp.length==2) {
                     ox1=gcp[0].oc[0], oy1=gcp[0].oc[1], nx1=gcp[0].nc[0], ny1=gcp[0].nc[1];
                     ox2=gcp[1].oc[0], oy2=gcp[1].oc[1], nx2=gcp[1].nc[0], ny2=gcp[1].nc[1];
@@ -726,11 +746,12 @@
                     oa=Math.atan2(odx,ody), na=Math.atan2(ndx,ndy);
                     a=na-oa;
                 }
-                else { // 3+ gcp-től létrehozzuk a Delaunay-háromszögeket és kiszámítjuk a bennük lévő lin.trafót
-                    // régi térkép illesztőpont-koordináták külön tömbbe
+                // 3+ gcps -> create Delaunay-triangles and calculate local linear transformaions
+                else { 
+                    // push old map gcp coords into a separate array
                     for (var p=[],i=0;i<gcp.length;i++)
                         p[i]=gcp[i].oc;
-                    var d=Delaunator.from(p);
+                    var d=Delaunator.from(p); // create triangles
                     t=d.triangles;
                     var fo=[],fn=[];
                     for (var i=0;i<t.length;i+=3) {
@@ -786,18 +807,8 @@
 						var xc=t.get('xcfn2o'), yc=t.get('ycfn2o');
 						return [xc[0]*nc[0]+xc[1]*nc[1]+xc[2],yc[0]*nc[0]+yc[1]*nc[1]+yc[2]];
 					}
-					// nem gcp-k áthelyezése ennek megfelelően
-					/*ogSource.forEachFeature(function(f){
-						if (!f.get('useAsGcp')) {
-							var id=f.get('id');
-                            if (f&&getFeatureByAttr(gSource,'id',id)) {
-                                var	nc=getFeatureByAttr(gSource,'id',id).getGeometry().getCoordinates();
-                                f.getGeometry().setCoordinates(new2old(nc));
-                            }
-                            else console.log(id+' nincs!');
-						}
-					});*/
-                    // fokháló mutatása
+
+                    // show (recalc) grid
                     addInterpolatedGrid();
                 }
             }
@@ -805,11 +816,11 @@
             // interplated geographic graticule
             function addInterpolatedGrid() {
                 var s=ogrid.getSource();
+                // clear previous grid
                 s.clear();
                 var f=[];
                 // calculate min/max latitudes/longitudes
                 // calculate a set of points along the old map edges
-                //var p=[[0,0],[mapW,0],[0,mapH],[mapW,mapH]]; // corners of old map
                 var p=[],bx=[];
                 for (var i=0;i<10;i++) {
                     var pt=old2new([i/10*mapW,0]);
@@ -1048,10 +1059,14 @@
             }
             
             // initial message
-            msgBox('<h1>MatchOldMaps</h1>'+
-                '<p>Georeference old maps by setting the position of places using a modern map in parallel view.</p>'+
-                '<p>&copy; 2019 Mátyás Gede &ndash; Department of Cartography and Geoinformatics, ELTE Eötvös Loránd University, Budapest</p>'
-            );
+            // check cookies and display message only on first load
+            if (document.cookie.indexOf('matcholdmap_splash=0')<0) {
+                msgBox('<h1>MatchOldMaps</h1>'+
+                    '<p>Georeference old maps by setting the position of places using a modern map in parallel view.</p>'+
+                    '<p>&copy; 2019 Mátyás Gede &ndash; Department of Cartography and Geoinformatics, ELTE Eötvös Loránd University, Budapest</p>'
+                );
+                document.cookie='matcholdmap_splash=0';
+            }
         </script>
     </body>
 </html>
