@@ -16,7 +16,7 @@
     <body>
         <div id="oldmap"></div>
         <div id="newmap"></div>
-        <button id="link" title="Link/unlink maps" onclick="switchLink()"></button>
+        <button id="link" class="unlink" title="Link/unlink maps" disabled onclick="switchLink()"></button>
         <button id="newpoint" title="New point" onclick="newGcp()">*</button>
         <div id="controls">
             <div>
@@ -43,7 +43,7 @@
             var nextId=1; // next id
             var labelAttr="id"; // map label attr name
             var mapW=0, mapH=0; // map size in pixels
-            var link=true; // are the two maps linked?
+            var link=false; // are the two maps linked?
             var fields; // array containing attribute names
             
             // DOM objects
@@ -378,7 +378,7 @@
                 return SwitchNorthControl;
             }(ol.control.Control));            
             
-            var tl=new ol.layer.Tile();
+            var imageLayer=new ol.layer.Image();
             var odts=new ol.source.Vector(); // source of Delaunay triangles on old map
             var ndts=new ol.source.Vector(); // source of Delaunay  triangles on new map
             // layer showing Delaunay triangles on old map
@@ -387,12 +387,19 @@
             var oldmap=new ol.Map({
                 target: 'oldmap',
                 controls: [new ol.control.Zoom(), new SwitchNorthControl()],
-                layers: [tl,dtlh,ogrid,ogcps],   
+                layers: [imageLayer,dtlh,ogrid,ogcps],   
                 view: new ol.View({
-                    resolutions: [256,192,128,96,64,48,32,24,16,12,8,6,4,3,2,1]
+                    // override built-in 'doubling' zoom levels
+                    resolutions: [256, 181, 128, 91, 64, 45, 32, 23, 16, 11, 8, 6, 4, 3, 2, 1.4, 1]
                 })
             });
             oldmap.addControl(new ol.control.LayerSwitcher());
+            
+            // initial fader and "load map" message
+            var oldMapFader=document.createElement('div');
+            oldMapFader.className='oldmapfader';
+            oldMapFader.innerHTML='<h1>Load old map image</h1>';
+            document.getElementById('oldmap').appendChild(oldMapFader);
                        
             // draggable points on old map
             draggablePoints(oldmap,ogSource);
@@ -404,25 +411,20 @@
                 r.onload=function(f) {
                     var img=document.createElement('img');
                     img.onload=function() {
-                        //console.log('...loaded');
                         var w=img.width, h=img.height;
-                        //console.log([w,h])
-                        var ss=new ol.layer.Image({
-                            //title: '...',
-                            zIndex: -1,
-                            source: new ol.source.ImageStatic({
-                                url: f.target.result,
-                                imageExtent: [0,0,w,h]
-                            })
-                        }); 
-                        oldmap.addLayer(ss);
+                        imageLayer.setSource(new ol.source.ImageStatic({
+                            url: f.target.result,
+                            imageExtent: [0,0,w,h]
+                        }));
                         oldmap.getView().fit([0,0,w,h]);
                         mapW=w; mapH=h;
-                        //console.log('layer added');
+                        hideMsgBox();
+                        // remove old map fader
+                        document.getElementById('oldmap').removeChild(oldMapFader);
                     }
                     img.src=f.target.result;
                 }
-                //console.log('loading map...')
+                msgBox("Loading...",{noOk:true});
                 r.readAsDataURL(ifi.files[0]);
             }
             
@@ -476,15 +478,9 @@
             var oa=Math.atan2(odx,ody), na=Math.atan2(ndx,ndy);
             var a=na-oa; // rotation
             
-            // coordinate transform from old to new (Web Mercator)
-            function old2new(oc) {
-                return [nx1+M*((oc[0]-ox1)*Math.cos(a)+(oc[1]-oy1)*Math.sin(a)),ny1+M*(-(oc[0]-ox1)*Math.sin(a)+(oc[1]-oy1)*Math.cos(a))];
-            }
-
-            // coordinate transform from new to old (Web Mercator)
-            function new2old(nc) {
-                return [ox1+((nc[0]-nx1)*Math.cos(a)-(nc[1]-ny1)*Math.sin(a))/M,oy1+((nc[0]-nx1)*Math.sin(a)+(nc[1]-ny1)*Math.cos(a))/M];
-            }
+            // coordinate transform functions
+            var old2new=function() {};
+            var new2old=function() {};
             
             // bulk geocoding of names without coordinates
             function geocode() {
@@ -736,7 +732,9 @@
                 // if less than 2 gcp, do nothing
                 if (gcp.length<2)
                     return;
-                // 2 gcps -> similarity transformation
+                // enable link button
+                document.getElementById('link').disabled=false;
+                // 2 gcps -> similarity transformation                
                 if (gcp.length==2) {
                     ox1=gcp[0].oc[0], oy1=gcp[0].oc[1], nx1=gcp[0].nc[0], ny1=gcp[0].nc[1];
                     ox2=gcp[1].oc[0], oy2=gcp[1].oc[1], nx2=gcp[1].nc[0], ny2=gcp[1].nc[1];
@@ -745,6 +743,14 @@
                     M=n_l/o_l;
                     oa=Math.atan2(odx,ody), na=Math.atan2(ndx,ndy);
                     a=na-oa;
+                    // coordinate transform from old to new (Web Mercator)
+                    old2new=function (oc) {
+                        return [nx1+M*((oc[0]-ox1)*Math.cos(a)+(oc[1]-oy1)*Math.sin(a)),ny1+M*(-(oc[0]-ox1)*Math.sin(a)+(oc[1]-oy1)*Math.cos(a))];
+                    }
+                    // coordinate transform from new to old (Web Mercator)
+                    new2old=function (nc) {
+                        return [ox1+((nc[0]-nx1)*Math.cos(a)-(nc[1]-ny1)*Math.sin(a))/M,oy1+((nc[0]-nx1)*Math.sin(a)+(nc[1]-ny1)*Math.cos(a))/M];
+                    }            
                 }
                 // 3+ gcps -> create Delaunay-triangles and calculate local linear transformaions
                 else { 
@@ -986,7 +992,16 @@
             
             // add new point pair
             function newGcp() {
-                var keys=gSource.getFeatures()[0].getKeys();
+                if (gSource.getFeatures().length>0)
+                    var keys=gSource.getFeatures()[0].getKeys();
+                else {
+                    // no gcps yet; set attribute names first
+                    var keys=prompt("Enter attribute names (separated by commas)").split(',');
+                    // trim whitespaces
+                    for (var i=0;i<keys.length;i++)
+                        keys[i]=keys[i].trim();
+                    labelAttr=keys[0];
+                }
                 var a={};
                 a.id=nextId++;
                 for (var i=0;i<keys.length;i++) 
@@ -1029,33 +1044,40 @@
                 });
                 var ax=linEq3(A,b1);
                 var ay=linEq3(A,b2);
-                console.log(ax);
-                console.log(ay);
-                console.log(Math.atan2(-ax[1],ay[1])/Math.PI*180);
-                console.log(Math.atan2(ay[0],ax[0])/Math.PI*180);
+                //console.log(ax);
+                //console.log(ay);
+                //console.log(Math.atan2(-ax[1],ay[1])/Math.PI*180);
+                //console.log(Math.atan2(ay[0],ax[0])/Math.PI*180);
                 return (Math.atan2(-ax[1],ay[1])+Math.atan2(ay[0],ax[0]))/2;
             }
             
             // opens a message box
-            function msgBox(html) {
+            function msgBox(html,opts) {
                 var f=document.getElementById('fader');
                 var mb=document.getElementById('msgbox');
                 mb.innerHTML=html+'<br/>';
                 // add OK button
-                var ob=document.createElement('input');
-                ob.type='button';ob.value='OK';
-                function closeIt() {
-                    f.style.display='none';
+                if (!opts||!opts.noOk) {
+                    var ob=document.createElement('input');
+                    ob.type='button';ob.value='OK';
+                    function closeIt() {
+                        f.style.display='none';
+                    }
+                    ob.onclick=closeIt;
+                    f.onkeydown=function(e) {
+                        console.log(e.keyCode)
+                        if (e.keyCode==13)
+                            closeIt();
+                    }
+                    mb.appendChild(ob);
                 }
-                ob.onclick=closeIt;
-                f.onkeydown=function(e) {
-                    console.log(e.keyCode)
-                    if (e.keyCode==13)
-                        closeIt();
-                }
-                mb.appendChild(ob);
                 // display fader and msgbox
                 f.style.display='block';
+            }
+            
+            // remove message box
+            function hideMsgBox() {
+                document.getElementById('fader').style.display='none';
             }
             
             // initial message
