@@ -106,17 +106,51 @@ html, body {
     border: none;
     border-radius: 2px;
     z-index: 10000;
-    bottom: 180px; left: 50%;
+    bottom: 178px; left: 50%;
+    -webkit-transform: translateX(-50%);
+    -ms-transform: translateX(-50%);
+    transform: translateX(-50%);    
+    width: 25px; height: 25px;
+    background-color: rgb(128, 158, 187);
+    font-size: 18px;
+    color: white;
+}
+#settings {
+    position: absolute;
+    border: none;
+    border-radius: 2px;
+    z-index: 10000;
+    bottom: 206px; left: 50%;
     -webkit-transform: translateX(-50%);
     -ms-transform: translateX(-50%);
     transform: translateX(-50%);    
     width: 25px; height: 25px;
     background-color: rgb(128, 158, 187);
     color: white;
-    /*background-image: url('img/link.png');*/
-    background-size: contain;
+    font-size: 18px;
+    padding: 0;
+}
+#help {
+    position: absolute;
+    border: none;
+    border-radius: 2px;
+    z-index: 10000;
+    bottom: 234px; left: 50%;
+    -webkit-transform: translateX(-50%);
+    -ms-transform: translateX(-50%);
+    transform: translateX(-50%);    
+    width: 25px; height: 25px;
+    background-color: rgb(128, 158, 187);
+    color: white;
+    font-size: 18px;
 }
 .rotate-north {
     top: 65px;
     left: .5em;
+}
+#settingsdiv h3 {
+    margin-top: 0;
+}
+#settingsdiv input {
+    width: 60px;
 }

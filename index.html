@@ -18,6 +18,8 @@
         <div id="newmap"></div>
         <button id="link" class="unlink" title="Link/unlink maps" disabled onclick="switchLink()"></button>
         <button id="newpoint" title="New point" onclick="newGcp()">*</button>
+        <button id="settings" title="Settings" onclick="settings()">&#9881;</button>
+        <button id="help" title="Display help" onclick="help()">?</button>
         <div id="controls">
             <div>
             <label for="loadoldmap">Load old map image (JPEG format)</label> 
@@ -45,6 +47,8 @@
             var mapW=0, mapH=0; // map size in pixels
             var link=false; // are the two maps linked?
             var fields; // array containing attribute names
+            var fontSize=12;
+            var dfi=1, dla=1;
             
             // DOM objects
             var gcpList=document.getElementById('gcplist');
@@ -63,13 +67,14 @@
                 else {
                     var fc=[255,128,0,.2], sc=[255,128,0,.6];
                 }
+                var ow=Math.round(fontSize/4);
                 return new ol.style.Style({
                     image: new ol.style.Circle({
                         radius: 5,
                         stroke: new ol.style.Stroke({ color: sc, width: 2 }),
                         fill: new ol.style.Fill({ color: fc })
                     }),
-                    text: r>400?null:new ol.style.Text({ text: f.get(labelAttr).split('|')[0], textAlign: "left", offsetX: 8, font: '12px sans-serif', stroke: new ol.style.Stroke({color:'#fff',width:3})  })
+                    text: r>400?null:new ol.style.Text({ text: f.get(labelAttr).split('|')[0], textAlign: "left", offsetX: 5+ow, font: fontSize+'px sans-serif', stroke: new ol.style.Stroke({color:'#fff',width:ow})  })
                 });
             }
             
@@ -81,13 +86,14 @@
                 else {
                     var fc=[255,128,0,.2], sc=[255,128,0,.6];
                 }
+                var ow=Math.round(fontSize/4);
                 return new ol.style.Style({
                     image: new ol.style.Circle({
                         radius: 5,
                         stroke: new ol.style.Stroke({ color: sc, width: 2 }),
                         fill: new ol.style.Fill({ color: fc })
                     }),
-                    text: r>10?null:new ol.style.Text({ text: f.get(labelAttr).split('|')[0], textAlign: "left", offsetX: 8, font: '12px sans-serif', stroke: new ol.style.Stroke({color:'#fff',width:3})  })
+                    text: r>10?null:new ol.style.Text({ text: f.get(labelAttr).split('|')[0], textAlign: "left", offsetX: 5+ow, font: fontSize+'px sans-serif', stroke: new ol.style.Stroke({color:'#fff',width:ow})  })
                 });
             }
             
@@ -104,7 +110,7 @@
                 style: gcpStyle
             });
             
-            // layer showing the computed pointer positioin on the new map
+            // layer showing the computed pointer position on the new map
             var nptrl=new ol.layer.Vector({
                 source: new ol.source.Vector({}),
                 style: new ol.style.Style({
@@ -117,8 +123,7 @@
                 })
             });
             var nptr=new ol.Feature(new ol.geom.Point([0,0]));
-            var nExtent=new ol.Feature(new ol.geom.LineString([[0,0]]));
-            nptrl.getSource().addFeatures([nptr,nExtent]);
+            nptrl.getSource().addFeatures([nptr]);
             
             // CSV GCP file input
             function loadCsv() {
@@ -272,10 +277,19 @@
             });
             // layer showing the active Delaunay triangle on new map
             var ndtlh=new ol.layer.Vector({ source: new ol.source.Vector() });
+            // layer showing the old map outline on new map
+            var oll=new ol.layer.Vector({ 
+                source: new ol.source.Vector(), 
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({ color: 'green', width: 2 })
+                })
+            });
+            var nExtent=new ol.Feature(new ol.geom.LineString([[0,0]]));
+            oll.getSource().addFeatures([nExtent]);
             // new map
             var newmap=new ol.Map({
                 target: 'newmap',
-                layers: [osm,otm,binga,bingr,ndtlh,ngcps,nptrl],
+                layers: [osm,otm,binga,bingr,oll,ndtlh,ngcps,nptrl],
                 view: new ol.View({
                     center: ol.proj.fromLonLat([19.1, 47.5]),
                     zoom: 11
@@ -644,7 +658,7 @@
                     var c='';
                     var p=fs[0].getKeys();
                     for (var i=0;i<p.length;i++)
-                        if (['geometry'].indexOf(p[i])<0)
+                        if (['geometry','useAsGcp'].indexOf(p[i])<0)
                             c+=p[i]+": "+fs[0].get(p[i])+"<br/>";
                     // open popup
                     var p=popup({
@@ -850,7 +864,8 @@
                 }
                 bx.push(bx[0].slice());
                 console.log(p);
-                var fi1=90, fi2=-90, la1=180, la2=-180, dfi=1, dla=1, fi, la;
+                var fi1=90, fi2=-90, la1=180, la2=-180, fi, la;
+                
                 for (var i=0;i<p.length;i++) {
                     [la,fi]=p[i];
                     //console.log([la,fi]);
@@ -1003,7 +1018,7 @@
                     labelAttr=keys[0];
                 }
                 var a={};
-                a.id=nextId++;
+                a.id=(nextId++).toString();
                 for (var i=0;i<keys.length;i++) 
                     if (['geometry','onOldMap','id'].indexOf(keys[i])<0)
                         a[keys[i]]=prompt('id: '+a.id+" - "+keys[i]);
@@ -1065,7 +1080,6 @@
                     }
                     ob.onclick=closeIt;
                     f.onkeydown=function(e) {
-                        console.log(e.keyCode)
                         if (e.keyCode==13)
                             closeIt();
                     }
@@ -1073,11 +1087,27 @@
                 }
                 // display fader and msgbox
                 f.style.display='block';
-            }
+            }            
             
             // remove message box
             function hideMsgBox() {
                 document.getElementById('fader').style.display='none';
+            }
+            
+            function help() {
+                msgBox('<h1>MatchOldMaps</h1>'+
+                    '<p>Georeference old maps by setting the position of places using a modern map in parallel view.</p>'+
+                    '<p>&copy; 2019 Mátyás Gede &ndash; Department of Cartography and Geoinformatics, ELTE Eötvös Loránd University, Budapest</p>');
+            }
+            
+            function settings() {
+                // display and change map settings
+                // only font-size and graticule density so far...
+                var html='<div id="settingsdiv"><h3>Settings</h3><table>';
+                html+='<tr><td>Font size <td><input type="text" value="'+fontSize+'" onchange="fontSize=parseFloat(this.value);gSource.changed();ogSource.changed()" /><td>px';
+                html+='<tr><td>Graticule density <td><input type="text" value="'+dfi+'" onchange="dfi=dla=parseFloat(this.value);addInterpolatedGrid()" /><td>°';
+                html+='</table></div>';
+                msgBox(html);
             }
             
             // initial message
