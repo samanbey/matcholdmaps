@@ -16,10 +16,12 @@
     <body>
         <div id="oldmap"></div>
         <div id="newmap"></div>
-        <button id="link" class="unlink" title="Link/unlink maps" disabled onclick="switchLink()"></button>
-        <button id="newpoint" title="New point" onclick="newGcp()">*</button>
-        <button id="settings" title="Settings" onclick="settings()">&#9881;</button>
-        <button id="help" title="Display help" onclick="help()">?</button>
+        <div id="middleButtons">
+            <button id="help" title="Display help" onclick="help()">?</button>
+            <button id="settings" title="Settings" onclick="settings()">&#9881;</button>
+            <button id="newpoint" title="New point" onclick="newGcp()">*</button>
+            <button id="link" class="unlink" title="Link/unlink maps" disabled onclick="switchLink()"></button>
+        </div>
         <div id="controls">
             <div>
             <label for="loadoldmap">Load old map image (JPEG format)</label> 
@@ -443,7 +445,8 @@
             }
             
             // synchronous move of maps
-            var linkedMove=false; // éppen mozgatunk?
+            // Hi, Belle :)
+            var linkedMove=false; // are we currently in move?
             
             oldmap.on('moveend',function(e) {
                 if (link&&!linkedMove) {
@@ -456,6 +459,7 @@
                     linkedMove=true;
                     newmap.getView().setCenter(nc);
                     newmap.getView().setResolution(or*M);
+                    // keep linkedMove true for .2 second to prevent unwanted feedback with the other map's moveend event
                     setTimeout(function(){linkedMove=false;},200);
                 }
             });
@@ -478,6 +482,7 @@
                     linkedMove=true;
                     oldmap.getView().setCenter(oc);
                     oldmap.getView().setResolution(nr*M);
+                    // keep linkedMove true for .2 second to prevent unwanted feedback with the other map's moveend event
                     setTimeout(function(){linkedMove=false;},200);
                 }
             });
@@ -601,6 +606,7 @@
                 }
             });
             
+            // remove point from map
             function removeFromMap(id) {
                 var of=getFeatureByAttr(ogSource,'id',id);
                 if (of) {
@@ -686,6 +692,7 @@
                 return false;
             }
             
+            // adds point with the given 'id' to old map at position 'pos'
             function addToOld(id,pos) {
                 var nf=getFeatureByAttr(gSource,'id',id);
                 var attr=nf.getProperties();
@@ -779,13 +786,13 @@
                         var tn=[gcp[t[i]].nc,gcp[t[i+1]].nc,gcp[t[i+2]].nc];
                         var go=new ol.geom.Polygon([to]);
                         var gn=new ol.geom.Polygon([tn]);
-                        // csak akkor használjuk a háromszög-párt, ha megegyezik a körüljárási irányuk
+                        // use triangle pair only if their circumcision directions match
                         var oa1=Math.atan2(to[1][0]-to[0][0],to[1][1]-to[0][1]);
                         var oa2=Math.atan2(to[2][0]-to[0][0],to[2][1]-to[0][1]);
                         var na1=Math.atan2(tn[1][0]-tn[0][0],tn[1][1]-tn[0][1]);
                         var na2=Math.atan2(tn[2][0]-tn[0][0],tn[2][1]-tn[0][1]);
                         if (Math.sin(oa1-oa2)*Math.sin(na1-na2)>0) {
-                            // adott háromszögön belül az oda és vissza lin. trafó paraméterek kiszámítása
+                            // calculating local linear transformations of the current triangle pair
                             var Ao=[],bo1=[],bo2=[],An=[],bn1=[],bn2=[];
                             for(var j=0;j<3;j++) {
                                 Ao[j]=[p[t[i+j]][0],p[t[i+j]][1],1];
@@ -814,7 +821,7 @@
                     odts.addFeatures(fo);
                     ndts.clear();
                     ndts.addFeatures(fn);
-                    // új átszámító függvények
+                    // new transformation functions
 					old2new=function(oc) {
 						var ts=odts.getFeaturesAtCoordinate(oc);                    
 						var t=ts.length>0?ts[0]:odts.getClosestFeatureToCoordinate(oc);
@@ -863,7 +870,7 @@
                     bx.push(pt);
                 }
                 bx.push(bx[0].slice());
-                console.log(p);
+                //console.log(p);
                 var fi1=90, fi2=-90, la1=180, la2=-180, fi, la;
                 
                 for (var i=0;i<p.length;i++) {
@@ -913,9 +920,8 @@
                 s.addFeatures(f);
             }
             
-            // az összes pontot felrakja a régi térképre (ha még nincsenek ott), és a koordinátáikat interpolálja
+            // puts all points to old map (those that aren't there yet) to their interpolated position (based on GCPs)
             function interpolate() {
-                // rakjunk át mindent, ami még nincs ott
                 var cnt=0;
                 gSource.forEachFeature(function(f) {
                     //if (cnt>100) return false;
@@ -928,11 +934,11 @@
             }
             
 
-            // pozícióhoz tartozó pont az új térképen és d-h mutatása (csak debughoz)
+            // show calculated new map position of the mouse pointer and the triangle used for calculation (only for debug)
             oldmap.on('pointermove',function(e) {
                 var np=old2new(e.coordinate);
                 nptr.getGeometry().setCoordinates(np);
-                // csak akkor, ha a háromszög réteg be van kapcsolva
+                // only if triangles layer is visible
                 if (dtlh.getVisible()) {
                     var ts=odts.getFeaturesAtCoordinate(e.coordinate);                    
                     var t=ts.length>0?ts[0]:odts.getClosestFeatureToCoordinate(e.coordinate);
@@ -1097,6 +1103,7 @@
             function help() {
                 msgBox('<h1>MatchOldMaps</h1>'+
                     '<p>Georeference old maps by setting the position of places using a modern map in parallel view.</p>'+
+                    '<p>Find code at <a href="https://github.com/samanbey/matcholdmaps">https://github.com/samanbey/matcholdmaps</a>.</p>'+
                     '<p>&copy; 2019 Mátyás Gede &ndash; Department of Cartography and Geoinformatics, ELTE Eötvös Loránd University, Budapest</p>');
             }
             
@@ -1119,6 +1126,9 @@
                 );
                 document.cookie='matcholdmap_splash=0';
             }
+            
+            // set link button initially disabled [ needed in Firefox ]
+            document.getElementById('link').disabled=true;
         </script>
     </body>
 </html>

@@ -7,6 +7,7 @@ html, body {
     height: 100%; width: 100%;
     background: rgba(0,0,0,0.2);
     display: none;
+    z-index: 10000;
 }
 .oldmapfader {
     position: absolute;
@@ -84,17 +85,31 @@ html, body {
     padding: 1px 3px;
     margin-left: auto;
 }
-#link {
+#middleButtons {
     position: absolute;
-    border: none;
-    border-radius: 2px;
-    z-index: 10000;
+    z-index: 9999;
     bottom: 150px; left: 50%;
     -webkit-transform: translateX(-50%);
     -ms-transform: translateX(-50%);
     transform: translateX(-50%);    
+    width: 25px;
+}
+#middleButtons button {
+    border: none;
+    border-radius: 2px;
     width: 25px; height: 25px;
+    margin-bottom: 5px;
     background-color: rgb(128, 158, 187);
+    color: white;
+    font-size: 18px;
+}
+#middleButtons button[disabled] {
+    background-color: #ccc;
+}
+#middleButtons button:enabled:hover {
+    background-color: rgba(0,60,136,.7);
+}
+#link {
     background-image: url('img/link.png');
     background-size: contain;
 }
@@ -102,47 +117,11 @@ html, body {
     background-image: url('img/unlink.png');
 }
 #newpoint {
-    position: absolute;
-    border: none;
-    border-radius: 2px;
-    z-index: 10000;
-    bottom: 178px; left: 50%;
-    -webkit-transform: translateX(-50%);
-    -ms-transform: translateX(-50%);
-    transform: translateX(-50%);    
-    width: 25px; height: 25px;
-    background-color: rgb(128, 158, 187);
-    font-size: 18px;
-    color: white;
 }
 #settings {
-    position: absolute;
-    border: none;
-    border-radius: 2px;
-    z-index: 10000;
-    bottom: 206px; left: 50%;
-    -webkit-transform: translateX(-50%);
-    -ms-transform: translateX(-50%);
-    transform: translateX(-50%);    
-    width: 25px; height: 25px;
-    background-color: rgb(128, 158, 187);
-    color: white;
-    font-size: 18px;
     padding: 0;
 }
 #help {
-    position: absolute;
-    border: none;
-    border-radius: 2px;
-    z-index: 10000;
-    bottom: 234px; left: 50%;
-    -webkit-transform: translateX(-50%);
-    -ms-transform: translateX(-50%);
-    transform: translateX(-50%);    
-    width: 25px; height: 25px;
-    background-color: rgb(128, 158, 187);
-    color: white;
-    font-size: 18px;
 }
 .rotate-north {
     top: 65px;
